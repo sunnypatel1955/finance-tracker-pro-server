@@ -10,16 +10,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Use environment variables from .env
+// Use environment variables from .env locally,
+// but on Heroku use DATABASE_URL with SSL
 const pool = new Pool({
-    user: process.env.PGUSER,
-    host: process.env.PGHOST,
-    database: process.env.PGDATABASE,
-    password: process.env.PGPASSWORD,
-    port: process.env.PGPORT,
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false
+    }
 });
 
-//Registration endpoint
+// Registration endpoint
 app.post('/api/register', async (req, res) => {
     const { fullName, email, password } = req.body;
     try {
@@ -39,7 +39,6 @@ app.post('/api/register', async (req, res) => {
         }
     }
 });
-
 
 // Login endpoint
 app.post('/api/login', async (req, res) => {
@@ -73,9 +72,27 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+console.log('Server starting...');
+
+app.get('/', (req, res) => {
+  console.log('Root / route accessed');
+  res.send('Server is running');
+});
+
+console.log('process.env.PORT =', process.env.PORT);
 
 
-app.listen(process.env.PORT || 3000, () => console.log('Server running on port ' + (process.env.PORT || 3000)));
+// --- REPLACE app.listen WITH THE FOLLOWING ---
+
+const PORT = process.env.PORT;
+if (!PORT) {
+  console.error('ERROR: PORT env variable is not set!');
+  process.exit(1); // Exit if PORT is missing so you catch it immediately
+}
+
+app.listen(PORT, () => {
+  console.log('Server running on port ' + PORT);
+});
 
 // Authentication Middleware
 function authenticateToken(req, res, next) {
@@ -94,7 +111,6 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
-
 
 // Save complete finance data (JSON)
 app.post('/api/financeServerData', authenticateToken, async (req, res) => {
@@ -146,7 +162,7 @@ app.get('/api/financeServerData', authenticateToken, async (req, res) => {
     }
 });
 
-//Change Password API
+// Change Password API
 app.post('/api/change-password', authenticateToken, async (req, res) => {
     console.log('Change password API called');
     const { email, currentPassword, newPassword } = req.body;
@@ -174,6 +190,7 @@ app.post('/api/change-password', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to change password' });
     }
 });
+
 
 // Add Transaction
 /*app.post('/api/transactions', authenticateToken, async (req, res) => {
