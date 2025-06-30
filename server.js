@@ -5,100 +5,146 @@ const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
+const dns = require('dns'); // Add this import
+
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// Use environment variables from .env locally,
-// but on Heroku use DATABASE_URL with SSL
+// Force IPv4 DNS resolution
+dns.setDefaultResultOrder('ipv4first');
+
+console.log('🔍 Environment Variables Check:');
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
+console.log('PORT:', process.env.PORT);
+
+// Parse the DATABASE_URL to extract components and force IPv4
+const dbUrl = new URL(process.env.DATABASE_URL);
+
+console.log('🔧 Database connection details:');
+console.log('Host:', dbUrl.hostname);
+console.log('Port:', dbUrl.port);
+console.log('Database:', dbUrl.pathname.slice(1));
+console.log('User:', dbUrl.username);
+
+// Create pool with IPv4-specific configuration
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    host: dbUrl.hostname,
+    port: parseInt(dbUrl.port) || 5432,
+    database: dbUrl.pathname.slice(1), // Remove leading slash
+    user: dbUrl.username,
+    password: dbUrl.password,
     ssl: {
-      rejectUnauthorized: false
-    }
+        rejectUnauthorized: false
+    },
+    // Force IPv4 connection
+    family: 4,
+    // Connection pool settings
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
 });
 
-// Registration endpoint
-app.post('/api/register', async (req, res) => {
-    const { fullName, email, password } = req.body;
+// Enhanced connection event logging
+pool.on('connect', (client) => {
+    console.log('✅ Database client connected via IPv4');
+});
+
+pool.on('error', (err) => {
+    console.error('❌ Database pool error:', err);
+});
+
+pool.on('acquire', () => {
+    console.log('🔗 Database connection acquired from pool');
+});
+
+pool.on('release', () => {
+    console.log('🔓 Database connection released back to pool');
+});
+
+// Test the IPv4 connection on startup
+async function testConnection() {
     try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const result = await pool.query(
-            'INSERT INTO users (email, password_hash, full_name) VALUES ($1, $2, $3) RETURNING user_id',
-            [email, hashedPassword, fullName]
-        );
-        const token = jwt.sign({ user_id: result.rows[0].user_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-        res.status(201).json({ token });
+        console.log('🔄 Testing IPv4 database connection...');
+        
+        const client = await pool.connect();
+        const result = await client.query('SELECT NOW() as current_time, version() as postgres_version');
+        
+        console.log('✅ IPv4 connection successful!');
+        console.log('🕐 Database time:', result.rows[0].current_time);
+        console.log('📊 PostgreSQL version:', result.rows[0].postgres_version.split(' ')[0]);
+        
+        // Test if tables exist
+        const tablesResult = await client.query(`
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public'
+            ORDER BY table_name
+        `);
+        console.log('📋 Available tables:', tablesResult.rows.map(row => row.table_name));
+        
+        client.release();
+        console.log('🎉 Database is fully operational with IPv4!');
+        
     } catch (err) {
-        console.error(err);
-        if (err.code === '23505') {
-            res.status(409).json({ message: 'Email already registered.' });
-        } else {
-            res.status(500).json({ message: 'Registration failed.' });
-        }
+        console.error('❌ IPv4 connection test failed:');
+        console.error('Error message:', err.message);
+        console.error('Error code:', err.code);
+        console.error('Error address:', err.address);
+        console.error('Full error:', err);
     }
-});
+}
 
-// Login endpoint
-app.post('/api/login', async (req, res) => {
-    const { email, password } = req.body;
-    try {
-        const result = await pool.query(
-            'SELECT user_id, full_name, password_hash FROM users WHERE email = $1', 
-            [email]
-        );
-        if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid email or password' });
-
-        const valid = await bcrypt.compare(password, result.rows[0].password_hash);
-        if (!valid) return res.status(401).json({ error: 'Invalid email or password' });
-
-        const token = jwt.sign(
-            { user_id: result.rows[0].user_id }, 
-            process.env.JWT_SECRET, 
-            { expiresIn: '1h' }
-        );
-
-        // Send token, email, and full name
-        res.status(200).json({
-            token,
-            email,
-            fullName: result.rows[0].full_name
-        });
-
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Login failed' });
-    }
-});
+// Call test connection
+testConnection();
 
 console.log('Server starting...');
 
 app.get('/', (req, res) => {
-  console.log('Root / route accessed');
-  res.send('Server is running');
+    console.log('Root / route accessed');
+    res.send('Server is running with IPv4 database connection');
+});
+
+// Health check endpoint
+app.get('/health', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT NOW() as current_time');
+        res.status(200).json({ 
+            status: 'healthy', 
+            database: 'connected via IPv4',
+            timestamp: result.rows[0].current_time,
+            connection_type: 'IPv4 forced'
+        });
+    } catch (error) {
+        console.error('Health check failed:', error);
+        res.status(500).json({ 
+            status: 'unhealthy', 
+            database: 'disconnected',
+            error: error.message,
+            error_code: error.code
+        });
+    }
 });
 
 console.log('process.env.PORT =', process.env.PORT);
 
-
-// --- REPLACE app.listen WITH THE FOLLOWING ---
-
 const PORT = process.env.PORT;
 if (!PORT) {
-  console.error('ERROR: PORT env variable is not set!');
-  process.exit(1); // Exit if PORT is missing so you catch it immediately
+    console.error('ERROR: PORT env variable is not set!');
+    process.exit(1);
 }
 
 app.listen(PORT, () => {
-  console.log('Server running on port ' + PORT);
+    console.log('Server running on port ' + PORT);
 });
 
 // Authentication Middleware
 function authenticateToken(req, res, next) {
     console.log('Middleware: authenticateToken() called');
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Get token from "Bearer <token>"
+    const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) return res.status(401).json({ error: 'Token missing' });
 
@@ -112,15 +158,100 @@ function authenticateToken(req, res, next) {
     });
 }
 
+// Enhanced Registration endpoint with IPv4 logging
+app.post('/api/register', async (req, res) => {
+    console.log('📝 Registration attempt started (IPv4 connection)');
+    console.log('Request body received:', !!req.body);
+    
+    const { fullName, email, password } = req.body;
+    
+    if (!fullName || !email || !password) {
+        console.log('❌ Missing required fields');
+        return res.status(400).json({ error: 'All fields are required' });
+    }
+    
+    try {
+        console.log('🔐 Hashing password...');
+        const hashedPassword = await bcrypt.hash(password, 10);
+        
+        console.log('💾 Inserting user into database via IPv4...');
+        const result = await pool.query(
+            'INSERT INTO users (email, password_hash, full_name) VALUES ($1, $2, $3) RETURNING user_id',
+            [email, hashedPassword, fullName]
+        );
+        
+        console.log('✅ User created successfully with ID:', result.rows[0].user_id);
+        
+        const token = jwt.sign({ user_id: result.rows[0].user_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        
+        console.log('🎫 JWT token generated successfully');
+        res.status(201).json({ token });
+        
+    } catch (err) {
+        console.error('❌ Registration error:');
+        console.error('Error message:', err.message);
+        console.error('Error code:', err.code);
+        console.error('Error syscall:', err.syscall);
+        console.error('Error address:', err.address);
+        
+        if (err.code === '23505') {
+            res.status(409).json({ message: 'Email already registered.' });
+        } else {
+            res.status(500).json({ message: 'Registration failed: ' + err.message });
+        }
+    }
+});
+
+// Login endpoint (keep your existing login code but with enhanced logging)
+app.post('/api/login', async (req, res) => {
+    console.log('🔑 Login attempt started (IPv4 connection)');
+    const { email, password } = req.body;
+    
+    try {
+        const result = await pool.query(
+            'SELECT user_id, full_name, password_hash FROM users WHERE email = $1', 
+            [email]
+        );
+        
+        if (result.rows.length === 0) {
+            console.log('❌ User not found for email:', email);
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+
+        const valid = await bcrypt.compare(password, result.rows[0].password_hash);
+        if (!valid) {
+            console.log('❌ Invalid password for email:', email);
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+
+        const token = jwt.sign(
+            { user_id: result.rows[0].user_id }, 
+            process.env.JWT_SECRET, 
+            { expiresIn: '1h' }
+        );
+
+        console.log('✅ Login successful for user:', result.rows[0].user_id);
+        res.status(200).json({
+            token,
+            email,
+            fullName: result.rows[0].full_name
+        });
+
+    } catch (err) {
+        console.error('❌ Login error:', err);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+// Keep all your other endpoints (finance data, change password, etc.) as they were
 // Save complete finance data (JSON)
 app.post('/api/financeServerData', authenticateToken, async (req, res) => {
-    console.log('📥 Server: Received POST /api/financeServerData');
+    console.log('📥 Server: Received POST /api/financeServerData (IPv4)');
 
     const userId = req.user.user_id;
     const { financeServerData } = req.body;
 
     console.log('🔐 Authenticated userId:', userId);
-    console.log('📊 Received financeServerData:', financeServerData);
 
     try {
         const result = await pool.query(
@@ -149,7 +280,7 @@ app.get('/api/financeServerData', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'No data found for user' });
         }
         const savedData = result.rows[0].data;
-        console.log('📤 Server: Sending finance data:', savedData);
+        console.log('📤 Server: Sending finance data');
         res.status(200).json({
             data: savedData.data,
             version: savedData.version,
@@ -164,7 +295,7 @@ app.get('/api/financeServerData', authenticateToken, async (req, res) => {
 
 // Change Password API
 app.post('/api/change-password', authenticateToken, async (req, res) => {
-    console.log('Change password API called');
+    console.log('🔒 Change password API called (IPv4)');
     const { email, currentPassword, newPassword } = req.body;
     
     try {
@@ -184,66 +315,10 @@ app.post('/api/change-password', authenticateToken, async (req, res) => {
             'UPDATE users SET password_hash = $1 WHERE user_id = $2',
             [hashedPassword, result.rows[0].user_id]
         );
+        console.log('✅ Password changed successfully');
         res.status(200).json({ message: 'Password changed successfully' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to change password' });
     }
 });
-
-
-// Add Transaction
-/*app.post('/api/transactions', authenticateToken, async (req, res) => {
-    const { type, amount, description } = req.body;
-    const userId = req.user.user_id;
-
-    if (!type || !amount) {
-        return res.status(400).json({ error: 'Type and amount are required' });
-    }
-
-    try {
-        const result = await pool.query(
-            'INSERT INTO transactions (user_id, type, amount, description) VALUES ($1, $2, $3, $4) RETURNING *',
-            [userId, type, amount, description]
-        );
-        res.status(201).json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to add transaction' });
-    }
-});
-
-
-// Fetch Transactions API
-app.get('/api/transactions', authenticateToken, async (req, res) => {
-    const user_id = req.user.user_id;
-    try {
-        const result = await pool.query(
-            'SELECT transaction_id, type, amount, category, description, date FROM transactions WHERE user_id = $1 ORDER BY date DESC',
-            [user_id]
-        );
-        res.status(200).json(result.rows);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to fetch transactions' });
-    }
-});
-
-// Delete Transaction API
-app.delete('/api/transactions/:id', authenticateToken, async (req, res) => {
-    const user_id = req.user.user_id;
-    const transaction_id = req.params.id;
-    try {
-        const result = await pool.query(
-            'DELETE FROM transactions WHERE transaction_id = $1 AND user_id = $2 RETURNING *',
-            [transaction_id, user_id]
-        );
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Transaction not found or unauthorized' });
-        }
-        res.status(200).json({ message: 'Transaction deleted successfully' });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to delete transaction' });
-    }
-});*/
