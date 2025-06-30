@@ -1,82 +1,43 @@
-require('dotenv').config();  // Make sure this is at the top
+require('dotenv').config();
 
 const express = require('express');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
-const dns = require('dns'); // Add this import
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
-
-// Force IPv4 DNS resolution
-dns.setDefaultResultOrder('ipv4first');
 
 console.log('🔍 Environment Variables Check:');
 console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
 console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
 console.log('PORT:', process.env.PORT);
 
-// Parse the DATABASE_URL to extract components and force IPv4
-const dbUrl = new URL(process.env.DATABASE_URL);
-
-console.log('🔧 Database connection details:');
-console.log('Host:', dbUrl.hostname);
-console.log('Port:', dbUrl.port);
-console.log('Database:', dbUrl.pathname.slice(1));
-console.log('User:', dbUrl.username);
-
-// Create pool with IPv4-specific configuration
+// Simple pool configuration with Supavisor (IPv4 compatible)
 const pool = new Pool({
-    host: dbUrl.hostname,
-    port: parseInt(dbUrl.port) || 5432,
-    database: dbUrl.pathname.slice(1), // Remove leading slash
-    user: dbUrl.username,
-    password: dbUrl.password,
+    connectionString: process.env.DATABASE_URL,
     ssl: {
         rejectUnauthorized: false
     },
-    // Force IPv4 connection
-    family: 4,
-    // Connection pool settings
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
 });
 
-// Enhanced connection event logging
-pool.on('connect', (client) => {
-    console.log('✅ Database client connected via IPv4');
-});
-
-pool.on('error', (err) => {
-    console.error('❌ Database pool error:', err);
-});
-
-pool.on('acquire', () => {
-    console.log('🔗 Database connection acquired from pool');
-});
-
-pool.on('release', () => {
-    console.log('🔓 Database connection released back to pool');
-});
-
-// Test the IPv4 connection on startup
+// Test connection on startup
 async function testConnection() {
     try {
-        console.log('🔄 Testing IPv4 database connection...');
-        
+        console.log('🔄 Testing Supavisor connection...');
         const client = await pool.connect();
         const result = await client.query('SELECT NOW() as current_time, version() as postgres_version');
         
-        console.log('✅ IPv4 connection successful!');
+        console.log('✅ Supavisor connection successful!');
         console.log('🕐 Database time:', result.rows[0].current_time);
         console.log('📊 PostgreSQL version:', result.rows[0].postgres_version.split(' ')[0]);
         
-        // Test if tables exist
+        // Test tables
         const tablesResult = await client.query(`
             SELECT table_name 
             FROM information_schema.tables 
@@ -86,49 +47,43 @@ async function testConnection() {
         console.log('📋 Available tables:', tablesResult.rows.map(row => row.table_name));
         
         client.release();
-        console.log('🎉 Database is fully operational with IPv4!');
+        console.log('🎉 Database is fully operational via Supavisor!');
         
     } catch (err) {
-        console.error('❌ IPv4 connection test failed:');
+        console.error('❌ Supavisor connection failed:');
         console.error('Error message:', err.message);
         console.error('Error code:', err.code);
-        console.error('Error address:', err.address);
         console.error('Full error:', err);
     }
 }
 
-// Call test connection
 testConnection();
 
 console.log('Server starting...');
 
 app.get('/', (req, res) => {
     console.log('Root / route accessed');
-    res.send('Server is running with IPv4 database connection');
+    res.send('Server is running with Supavisor (IPv4 compatible) connection');
 });
 
-// Health check endpoint
 app.get('/health', async (req, res) => {
     try {
         const result = await pool.query('SELECT NOW() as current_time');
         res.status(200).json({ 
             status: 'healthy', 
-            database: 'connected via IPv4',
+            database: 'connected via Supavisor',
             timestamp: result.rows[0].current_time,
-            connection_type: 'IPv4 forced'
+            connection_type: 'Supavisor (IPv4 compatible)'
         });
     } catch (error) {
         console.error('Health check failed:', error);
         res.status(500).json({ 
             status: 'unhealthy', 
             database: 'disconnected',
-            error: error.message,
-            error_code: error.code
+            error: error.message
         });
     }
 });
-
-console.log('process.env.PORT =', process.env.PORT);
 
 const PORT = process.env.PORT;
 if (!PORT) {
@@ -142,7 +97,6 @@ app.listen(PORT, () => {
 
 // Authentication Middleware
 function authenticateToken(req, res, next) {
-    console.log('Middleware: authenticateToken() called');
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
@@ -150,7 +104,6 @@ function authenticateToken(req, res, next) {
 
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
         if (err) {
-            console.error(err);
             return res.status(403).json({ error: 'Invalid or expired token' });
         }
         req.user = user;
@@ -158,53 +111,39 @@ function authenticateToken(req, res, next) {
     });
 }
 
-// Enhanced Registration endpoint with IPv4 logging
+// Registration endpoint
 app.post('/api/register', async (req, res) => {
-    console.log('📝 Registration attempt started (IPv4 connection)');
-    console.log('Request body received:', !!req.body);
-    
+    console.log('📝 Registration attempt via Supavisor');
     const { fullName, email, password } = req.body;
     
     if (!fullName || !email || !password) {
-        console.log('❌ Missing required fields');
         return res.status(400).json({ error: 'All fields are required' });
     }
     
     try {
-        console.log('🔐 Hashing password...');
         const hashedPassword = await bcrypt.hash(password, 10);
-        
-        console.log('💾 Inserting user into database via IPv4...');
         const result = await pool.query(
             'INSERT INTO users (email, password_hash, full_name) VALUES ($1, $2, $3) RETURNING user_id',
             [email, hashedPassword, fullName]
         );
         
-        console.log('✅ User created successfully with ID:', result.rows[0].user_id);
-        
+        console.log('✅ User created with ID:', result.rows[0].user_id);
         const token = jwt.sign({ user_id: result.rows[0].user_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-        
-        console.log('🎫 JWT token generated successfully');
         res.status(201).json({ token });
         
     } catch (err) {
-        console.error('❌ Registration error:');
-        console.error('Error message:', err.message);
-        console.error('Error code:', err.code);
-        console.error('Error syscall:', err.syscall);
-        console.error('Error address:', err.address);
-        
+        console.error('❌ Registration error:', err.message);
         if (err.code === '23505') {
             res.status(409).json({ message: 'Email already registered.' });
         } else {
-            res.status(500).json({ message: 'Registration failed: ' + err.message });
+            res.status(500).json({ message: 'Registration failed.' });
         }
     }
 });
 
-// Login endpoint (keep your existing login code but with enhanced logging)
+// Login endpoint
 app.post('/api/login', async (req, res) => {
-    console.log('🔑 Login attempt started (IPv4 connection)');
+    console.log('🔑 Login attempt via Supavisor');
     const { email, password } = req.body;
     
     try {
@@ -214,23 +153,16 @@ app.post('/api/login', async (req, res) => {
         );
         
         if (result.rows.length === 0) {
-            console.log('❌ User not found for email:', email);
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
         const valid = await bcrypt.compare(password, result.rows[0].password_hash);
         if (!valid) {
-            console.log('❌ Invalid password for email:', email);
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
-        const token = jwt.sign(
-            { user_id: result.rows[0].user_id }, 
-            process.env.JWT_SECRET, 
-            { expiresIn: '1h' }
-        );
-
-        console.log('✅ Login successful for user:', result.rows[0].user_id);
+        const token = jwt.sign({ user_id: result.rows[0].user_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        
         res.status(200).json({
             token,
             email,
@@ -243,23 +175,16 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// Keep all your other endpoints (finance data, change password, etc.) as they were
-// Save complete finance data (JSON)
+// Your other endpoints (finance data, change password, etc.)
 app.post('/api/financeServerData', authenticateToken, async (req, res) => {
-    console.log('📥 Server: Received POST /api/financeServerData (IPv4)');
-
     const userId = req.user.user_id;
     const { financeServerData } = req.body;
-
-    console.log('🔐 Authenticated userId:', userId);
 
     try {
         const result = await pool.query(
             'INSERT INTO finance_data (user_id, data, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()',
             [userId, financeServerData]
         );
-        console.log('✅ Database operation result:', result.rowCount);
-        
         res.status(200).json({ message: 'Finance data saved successfully on server' });
     } catch (err) {
         console.error('❌ Error during DB operation:', err);
@@ -267,7 +192,6 @@ app.post('/api/financeServerData', authenticateToken, async (req, res) => {
     }
 });
 
-// Fetch complete finance data
 app.get('/api/financeServerData', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
 
@@ -280,7 +204,6 @@ app.get('/api/financeServerData', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'No data found for user' });
         }
         const savedData = result.rows[0].data;
-        console.log('📤 Server: Sending finance data');
         res.status(200).json({
             data: savedData.data,
             version: savedData.version,
@@ -293,9 +216,7 @@ app.get('/api/financeServerData', authenticateToken, async (req, res) => {
     }
 });
 
-// Change Password API
 app.post('/api/change-password', authenticateToken, async (req, res) => {
-    console.log('🔒 Change password API called (IPv4)');
     const { email, currentPassword, newPassword } = req.body;
     
     try {
@@ -315,7 +236,6 @@ app.post('/api/change-password', authenticateToken, async (req, res) => {
             'UPDATE users SET password_hash = $1 WHERE user_id = $2',
             [hashedPassword, result.rows[0].user_id]
         );
-        console.log('✅ Password changed successfully');
         res.status(200).json({ message: 'Password changed successfully' });
     } catch (err) {
         console.error(err);
