@@ -85,6 +85,17 @@ app.get('/health', async (req, res) => {
     }
 });
 
+// Keep-alive ping endpoint
+app.get('/ping', (req, res) => {
+    const now = new Date().toISOString();
+    console.log(`🏓 Ping received at ${now} (uptime: ${Math.floor(process.uptime())}s)`);
+    res.json({ 
+        status: 'pong', 
+        timestamp: now,
+        uptime: process.uptime() 
+    });
+});
+
 const PORT = process.env.PORT;
 if (!PORT) {
     console.error('ERROR: PORT env variable is not set!');
@@ -93,6 +104,31 @@ if (!PORT) {
 
 app.listen(PORT, () => {
     console.log('Server running on port ' + PORT);
+    
+    // Keep-alive mechanism for free tier (prevent spin-down)
+    if (process.env.NODE_ENV === 'production') {
+        const RENDER_APP_URL = 'https://finance-tracker-pro-server.onrender.com';
+        
+        console.log('🔄 Setting up keep-alive for free tier...');
+        console.log('💓 Will ping every 14 minutes to prevent spin-down');
+        
+        setInterval(async () => {
+            try {
+                console.log('💓 Keep-alive ping...');
+                const response = await fetch(`${RENDER_APP_URL}/ping`);
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('✅ Keep-alive successful:', data.status, `(uptime: ${Math.floor(data.uptime)}s)`);
+                } else {
+                    console.log('⚠️ Keep-alive response not OK:', response.status);
+                }
+            } catch (error) {
+                console.log('❌ Keep-alive failed:', error.message);
+            }
+        }, 14 * 60 * 1000); // Every 14 minutes (840,000 ms)
+    } else {
+        console.log('⚠️ Keep-alive disabled (not in production)');
+    }
 });
 
 // Authentication Middleware
@@ -175,16 +211,22 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// Your other endpoints (finance data, change password, etc.)
+// Save complete finance data (JSON)
 app.post('/api/financeServerData', authenticateToken, async (req, res) => {
+    console.log('📥 Server: Received POST /api/financeServerData');
+
     const userId = req.user.user_id;
     const { financeServerData } = req.body;
+
+    console.log('🔐 Authenticated userId:', userId);
 
     try {
         const result = await pool.query(
             'INSERT INTO finance_data (user_id, data, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()',
             [userId, financeServerData]
         );
+        console.log('✅ Database operation result:', result.rowCount);
+        
         res.status(200).json({ message: 'Finance data saved successfully on server' });
     } catch (err) {
         console.error('❌ Error during DB operation:', err);
@@ -192,6 +234,7 @@ app.post('/api/financeServerData', authenticateToken, async (req, res) => {
     }
 });
 
+// Fetch complete finance data
 app.get('/api/financeServerData', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
 
@@ -204,6 +247,7 @@ app.get('/api/financeServerData', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'No data found for user' });
         }
         const savedData = result.rows[0].data;
+        console.log('📤 Server: Sending finance data');
         res.status(200).json({
             data: savedData.data,
             version: savedData.version,
@@ -216,7 +260,9 @@ app.get('/api/financeServerData', authenticateToken, async (req, res) => {
     }
 });
 
+// Change Password API
 app.post('/api/change-password', authenticateToken, async (req, res) => {
+    console.log('🔒 Change password API called');
     const { email, currentPassword, newPassword } = req.body;
     
     try {
@@ -236,6 +282,7 @@ app.post('/api/change-password', authenticateToken, async (req, res) => {
             'UPDATE users SET password_hash = $1 WHERE user_id = $2',
             [hashedPassword, result.rows[0].user_id]
         );
+        console.log('✅ Password changed successfully');
         res.status(200).json({ message: 'Password changed successfully' });
     } catch (err) {
         console.error(err);
