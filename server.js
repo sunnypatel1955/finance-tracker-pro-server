@@ -80,7 +80,7 @@ app.get('/', (req, res) => {
 
 // Registration endpoint
 app.post('/api/register', async (req, res) => {
-    const { fullName, email, password } = req.body;
+    const { fullName, email, password } = req.body || {};
     
     // Input validation
     if (!fullName || !email || !password) {
