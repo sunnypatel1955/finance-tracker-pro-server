@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const cors = require('cors');
 
 const app = express();
+app.use(express.json());
 
 // CORS middleware — must be before any routes
 app.use(cors({
