@@ -7,24 +7,23 @@ const bcrypt = require('bcrypt');
 const cors = require('cors');
 const app = express();
 
-// CORS configuration - allow your frontend domains
-app.use(cors({
+// CORS configuration - clean and consistent
+const corsOptions = {
     origin: [
         'http://localhost:3000',
         'http://localhost:5000',
         'http://127.0.0.1:5500',
         'http://127.0.0.1:5501',
-        'https://sunnypatel1955.github.io' // Your GitHub Pages domain
+        'https://sunnypatel1955.github.io'
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
-}));
+};
 
-app.use(express.json({ limit: '50mb' })); // Increase limit for large finance data
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Preflight for all routes
 
-// Handle preflight requests
-app.options('*', cors());
 
 // Database connection
 const pool = new Pool({
