@@ -259,6 +259,22 @@ const server = app.listen(PORT, () => {
   console.log(`📊 Finance Tracker API is ready!`);
 });
 
+// 👈 ADD THIS: Auto ping code to keep Render server alive
+if (process.env.NODE_ENV !== 'development') {
+  const PING_URL = process.env.PING_URL || `https://finance-tracker-pro-server.onrender.com/`;
+  console.log(`🌐 Auto pinging ${PING_URL} every 14 minutes to prevent idle shutdown`);
+
+  setInterval(() => {
+    fetch(PING_URL)
+      .then(res => {
+        console.log(`[Auto Ping] Server responded with status: ${res.status}`);
+      })
+      .catch(err => {
+        console.error('[Auto Ping] Error pinging server:', err);
+      });
+  }, 14 * 60 * 1000); // every 14 minutes
+}
+
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
