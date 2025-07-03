@@ -11,20 +11,37 @@ const app = express();
 app.use(cors({
     origin: [
         'http://localhost:3000',
-        'http://localhost:5000', 
-        'https://your-frontend-domain.com' // Add your actual frontend domain
+        'http://localhost:5000',
+        'http://127.0.0.1:5500',
+        'http://127.0.0.1:5501',
+        'https://sunnypatel1955.github.io' // Your GitHub Pages domain
     ],
-    credentials: true
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '50mb' })); // Increase limit for large finance data
+
+// Handle preflight requests
+app.options('*', cors());
 
 // Database connection
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? {
         rejectUnauthorized: false
-    } : false
+    } : false,
+    // Connection pool config
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000
+});
+
+// Handle pool errors
+pool.on('error', (err, client) => {
+    console.error('Unexpected error on idle client', err);
+    // Don't exit the process, just log the error
 });
 
 // Test database connection
@@ -284,7 +301,7 @@ app.use('*', (req, res) => {
 
 // Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📊 Finance Tracker API is ready!`);
 });
@@ -292,7 +309,23 @@ app.listen(PORT, () => {
 // Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('SIGTERM received, shutting down gracefully');
-    pool.end(() => {
-        process.exit(0);
+    server.close(() => {
+        pool.end(() => {
+            console.log('Database pool closed');
+            process.exit(0);
+        });
     });
+});
+
+// Handle uncaught errors
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    // Don't exit on database errors
+    if (!err.message.includes('client_termination')) {
+        process.exit(1);
+    }
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
