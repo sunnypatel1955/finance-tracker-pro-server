@@ -22,8 +22,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Preflight for all routes
-
 
 // Database connection
 const pool = new Pool({
@@ -120,18 +118,22 @@ app.post('/api/register', async (req, res) => {
 
 // Login endpoint - FIXED to match frontend expectations
 app.post('/api/login', async (req, res) => {
+    if (!req.body) {
+        return res.status(400).json({ error: 'Request body is missing' });
+    }
+
     const { email, password, rememberMe } = req.body;
-    
+
     if (!email || !password) {
         return res.status(400).json({ error: 'Email and password are required' });
     }
-    
+
     try {
         const result = await pool.query(
-            'SELECT user_id, full_name, password_hash FROM users WHERE email = $1', 
+            'SELECT user_id, full_name, password_hash FROM users WHERE email = $1',
             [email.toLowerCase()]
         );
-        
+
         if (result.rows.length === 0) {
             return res.status(401).json({ error: 'Invalid email or password' });
         }
@@ -141,14 +143,13 @@ app.post('/api/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
-        // Longer expiration time - 24h normally, 30 days if remember me
         const expiresIn = rememberMe ? '30d' : '24h';
         const token = jwt.sign(
-            { 
+            {
                 user_id: result.rows[0].user_id,
                 email: email.toLowerCase()
-            }, 
-            process.env.JWT_SECRET, 
+            },
+            process.env.JWT_SECRET,
             { expiresIn }
         );
 
