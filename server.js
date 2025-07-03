@@ -5,129 +5,35 @@ const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
-
 const app = express();
-app.use(cors());
-app.use(express.json());
 
-console.log('🔍 Environment Variables Check:');
-console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
-console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
-console.log('PORT:', process.env.PORT);
+// CORS configuration - allow your frontend domains
+app.use(cors({
+    origin: [
+        'http://localhost:3000',
+        'http://localhost:5000', 
+        'https://your-frontend-domain.com' // Add your actual frontend domain
+    ],
+    credentials: true
+}));
 
-// Simple pool configuration with Supavisor (IPv4 compatible)
+app.use(express.json({ limit: '50mb' })); // Increase limit for large finance data
+
+// Database connection
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: {
+    ssl: process.env.NODE_ENV === 'production' ? {
         rejectUnauthorized: false
-    },
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
+    } : false
 });
 
-// Test connection on startup
-async function testConnection() {
-    try {
-        console.log('🔄 Testing Supavisor connection...');
-        const client = await pool.connect();
-        const result = await client.query('SELECT NOW() as current_time, version() as postgres_version');
-        
-        console.log('✅ Supavisor connection successful!');
-        console.log('🕐 Database time:', result.rows[0].current_time);
-        console.log('📊 PostgreSQL version:', result.rows[0].postgres_version.split(' ')[0]);
-        
-        // Test tables
-        const tablesResult = await client.query(`
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'public'
-            ORDER BY table_name
-        `);
-        console.log('📋 Available tables:', tablesResult.rows.map(row => row.table_name));
-        
-        client.release();
-        console.log('🎉 Database is fully operational via Supavisor!');
-        
-    } catch (err) {
-        console.error('❌ Supavisor connection failed:');
-        console.error('Error message:', err.message);
-        console.error('Error code:', err.code);
-        console.error('Full error:', err);
-    }
-}
-
-testConnection();
-
-console.log('Server starting...');
-
-app.get('/', (req, res) => {
-    console.log('Root / route accessed');
-    res.send('Server is running with Supavisor (IPv4 compatible) connection');
-});
-
-app.get('/health', async (req, res) => {
-    try {
-        const result = await pool.query('SELECT NOW() as current_time');
-        res.status(200).json({ 
-            status: 'healthy', 
-            database: 'connected via Supavisor',
-            timestamp: result.rows[0].current_time,
-            connection_type: 'Supavisor (IPv4 compatible)'
-        });
-    } catch (error) {
-        console.error('Health check failed:', error);
-        res.status(500).json({ 
-            status: 'unhealthy', 
-            database: 'disconnected',
-            error: error.message
-        });
-    }
-});
-
-// Keep-alive ping endpoint
-app.get('/ping', (req, res) => {
-    const now = new Date().toISOString();
-    console.log(`🏓 Ping received at ${now} (uptime: ${Math.floor(process.uptime())}s)`);
-    res.json({ 
-        status: 'pong', 
-        timestamp: now,
-        uptime: process.uptime() 
-    });
-});
-
-const PORT = process.env.PORT;
-if (!PORT) {
-    console.error('ERROR: PORT env variable is not set!');
-    process.exit(1);
-}
-
-app.listen(PORT, () => {
-    console.log('Server running on port ' + PORT);
-    
-    // Keep-alive mechanism for free tier (prevent spin-down)
-    if (process.env.NODE_ENV === 'production') {
-        const RENDER_APP_URL = 'https://finance-tracker-pro-server.onrender.com';
-        
-        console.log('🔄 Setting up keep-alive for free tier...');
-        console.log('💓 Will ping every 14 minutes to prevent spin-down');
-        
-        setInterval(async () => {
-            try {
-                console.log('💓 Keep-alive ping...');
-                const response = await fetch(`${RENDER_APP_URL}/ping`);
-                if (response.ok) {
-                    const data = await response.json();
-                    console.log('✅ Keep-alive successful:', data.status, `(uptime: ${Math.floor(data.uptime)}s)`);
-                } else {
-                    console.log('⚠️ Keep-alive response not OK:', response.status);
-                }
-            } catch (error) {
-                console.log('❌ Keep-alive failed:', error.message);
-            }
-        }, 14 * 60 * 1000); // Every 14 minutes (840,000 ms)
+// Test database connection
+pool.connect((err, client, release) => {
+    if (err) {
+        console.error('❌ Error connecting to database:', err);
     } else {
-        console.log('⚠️ Keep-alive disabled (not in production)');
+        console.log('✅ Database connected successfully');
+        release();
     }
 });
 
@@ -136,10 +42,13 @@ function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token) return res.status(401).json({ error: 'Token missing' });
+    if (!token) {
+        return res.status(401).json({ error: 'Access token required' });
+    }
 
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
         if (err) {
+            console.error('JWT verification error:', err);
             return res.status(403).json({ error: 'Invalid or expired token' });
         }
         req.user = user;
@@ -147,45 +56,64 @@ function authenticateToken(req, res, next) {
     });
 }
 
+// Health check endpoint
+app.get('/', (req, res) => {
+    res.json({ 
+        message: 'Finance Tracker Server is running',
+        timestamp: new Date().toISOString()
+    });
+});
+
 // Registration endpoint
 app.post('/api/register', async (req, res) => {
-    console.log('📝 Registration attempt via Supavisor');
     const { fullName, email, password } = req.body;
     
+    // Input validation
     if (!fullName || !email || !password) {
         return res.status(400).json({ error: 'All fields are required' });
     }
     
+    if (password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    
     try {
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword = await bcrypt.hash(password, 12);
         const result = await pool.query(
-            'INSERT INTO users (email, password_hash, full_name) VALUES ($1, $2, $3) RETURNING user_id',
-            [email, hashedPassword, fullName]
+            'INSERT INTO users (email, password_hash, full_name) VALUES ($1, $2, $3) RETURNING user_id, email, full_name',
+            [email.toLowerCase(), hashedPassword, fullName]
         );
         
-        console.log('✅ User created with ID:', result.rows[0].user_id);
-        const token = jwt.sign({ user_id: result.rows[0].user_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-        res.status(201).json({ token });
-        
+        res.status(201).json({ 
+            message: 'User registered successfully',
+            user: {
+                id: result.rows[0].user_id,
+                email: result.rows[0].email,
+                fullName: result.rows[0].full_name
+            }
+        });
     } catch (err) {
-        console.error('❌ Registration error:', err.message);
+        console.error('Registration error:', err);
         if (err.code === '23505') {
-            res.status(409).json({ message: 'Email already registered.' });
+            res.status(409).json({ error: 'Email already exists' });
         } else {
-            res.status(500).json({ message: 'Registration failed.' });
+            res.status(500).json({ error: 'Registration failed' });
         }
     }
 });
 
-// Login endpoint
+// Login endpoint - FIXED to match frontend expectations
 app.post('/api/login', async (req, res) => {
-    console.log('🔑 Login attempt via Supavisor');
-    const { email, password } = req.body;
+    const { email, password, rememberMe } = req.body;
+    
+    if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+    }
     
     try {
         const result = await pool.query(
             'SELECT user_id, full_name, password_hash FROM users WHERE email = $1', 
-            [email]
+            [email.toLowerCase()]
         );
         
         if (result.rows.length === 0) {
@@ -197,95 +125,174 @@ app.post('/api/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
-        const token = jwt.sign({ user_id: result.rows[0].user_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-        
+        // Longer expiration time - 24h normally, 30 days if remember me
+        const expiresIn = rememberMe ? '30d' : '24h';
+        const token = jwt.sign(
+            { 
+                user_id: result.rows[0].user_id,
+                email: email.toLowerCase()
+            }, 
+            process.env.JWT_SECRET, 
+            { expiresIn }
+        );
+
         res.status(200).json({
             token,
-            email,
+            email: email.toLowerCase(),
             fullName: result.rows[0].full_name
         });
 
     } catch (err) {
-        console.error('❌ Login error:', err);
+        console.error('Login error:', err);
         res.status(500).json({ error: 'Login failed' });
     }
 });
 
-// Save complete finance data (JSON)
-app.post('/api/financeServerData', authenticateToken, async (req, res) => {
-    console.log('📥 Server: Received POST /api/financeServerData');
+// Change Password - FIXED to match frontend
+app.post('/api/change-password', authenticateToken, async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.user_id;
+    
+    if (!currentPassword || !newPassword) {
+        return res.status(400).json({ error: 'Current and new passwords are required' });
+    }
+    
+    if (newPassword.length < 8) {
+        return res.status(400).json({ error: 'New password must be at least 8 characters' });
+    }
+    
+    try {
+        const result = await pool.query(
+            'SELECT password_hash FROM users WHERE user_id = $1',
+            [userId]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const valid = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
+        if (!valid) {
+            return res.status(401).json({ error: 'Current password is incorrect' });
+        }
+        
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        await pool.query(
+            'UPDATE users SET password_hash = $1 WHERE user_id = $2',
+            [hashedPassword, userId]
+        );
+        
+        res.status(200).json({ message: 'Password changed successfully' });
+    } catch (err) {
+        console.error('Change password error:', err);
+        res.status(500).json({ error: 'Failed to change password' });
+    }
+});
 
+// Save finance data - ENHANCED
+app.post('/api/financeServerData', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
     const { financeServerData } = req.body;
 
-    console.log('🔐 Authenticated userId:', userId);
+    if (!financeServerData) {
+        return res.status(400).json({ error: 'Finance data is required' });
+    }
 
     try {
         const result = await pool.query(
-            'INSERT INTO finance_data (user_id, data, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()',
+            `INSERT INTO finance_data (user_id, data, updated_at) 
+             VALUES ($1, $2, NOW()) 
+             ON CONFLICT (user_id) 
+             DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+             RETURNING updated_at`,
             [userId, financeServerData]
         );
-        console.log('✅ Database operation result:', result.rowCount);
         
-        res.status(200).json({ message: 'Finance data saved successfully on server' });
+        console.log('✅ Finance data saved for user:', userId);
+        res.status(200).json({ 
+            message: 'Data saved successfully',
+            timestamp: result.rows[0].updated_at
+        });
     } catch (err) {
-        console.error('❌ Error during DB operation:', err);
+        console.error('❌ Save finance data error:', err);
         res.status(500).json({ error: 'Failed to save finance data' });
     }
 });
 
-// Fetch complete finance data
+// Get finance data - ENHANCED
 app.get('/api/financeServerData', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
 
     try {
         const result = await pool.query(
-            'SELECT data FROM finance_data WHERE user_id = $1',
+            'SELECT data, updated_at FROM finance_data WHERE user_id = $1',
             [userId]
         );
+        
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'No data found for user' });
         }
+        
         const savedData = result.rows[0].data;
-        console.log('📤 Server: Sending finance data');
+        
+        // Return the exact structure frontend expects
         res.status(200).json({
-            data: savedData.data,
-            version: savedData.version,
-            timestamp: savedData.timestamp,
-            historicalNetWorth: savedData.historicalNetWorth
+            data: savedData.data || {},
+            version: savedData.version || 1,
+            timestamp: savedData.timestamp || result.rows[0].updated_at,
+            historicalNetWorth: savedData.historicalNetWorth || [],
+            checksum: savedData.checksum
         });
     } catch (err) {
-        console.error(err);
+        console.error('❌ Get finance data error:', err);
         res.status(500).json({ error: 'Failed to fetch finance data' });
     }
 });
 
-// Change Password API
-app.post('/api/change-password', authenticateToken, async (req, res) => {
-    console.log('🔒 Change password API called');
-    const { email, currentPassword, newPassword } = req.body;
-    
+// DELETE finance data - MISSING ENDPOINT ADDED
+app.delete('/api/financeServerData', authenticateToken, async (req, res) => {
+    const userId = req.user.user_id;
+
     try {
         const result = await pool.query(
-            'SELECT user_id, password_hash FROM users WHERE email = $1',
-            [email]
+            'DELETE FROM finance_data WHERE user_id = $1 RETURNING user_id',
+            [userId]
         );
-        if (result.rows.length === 0) {
-            return res.status(401).json({ error: 'Invalid email or password' });
+        
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'No data found to delete' });
         }
-        const valid = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
-        if (!valid) {
-            return res.status(401).json({ error: 'Invalid email or password' });
-        }
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
-        await pool.query(
-            'UPDATE users SET password_hash = $1 WHERE user_id = $2',
-            [hashedPassword, result.rows[0].user_id]
-        );
-        console.log('✅ Password changed successfully');
-        res.status(200).json({ message: 'Password changed successfully' });
+        
+        console.log('✅ Finance data deleted for user:', userId);
+        res.status(200).json({ message: 'All finance data deleted successfully' });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Failed to change password' });
+        console.error('❌ Delete finance data error:', err);
+        res.status(500).json({ error: 'Failed to delete finance data' });
     }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+});
+
+// 404 handler
+app.use('*', (req, res) => {
+    res.status(404).json({ error: 'Endpoint not found' });
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📊 Finance Tracker API is ready!`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully');
+    pool.end(() => {
+        process.exit(0);
+    });
 });
